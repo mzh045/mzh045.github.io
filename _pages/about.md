@@ -20,6 +20,6 @@ University of Science and Technology of China<br>
 mzh045@ustc.edu.cn<br>
 [Google scholar](https://scholar.google.com/citations?user=Eom6m6UAAAAJ) | [DBLP](https://dblp.org/pid/240/2623.html) | [Github](https://github.com/mzh045) | [ORCID](https://orcid.org/0000-0002-8153-341X)
 
-I am a postdoctoral researcher in the School of Cyber Science and Technology, [University of Science and Technology of China (USTC)](https://www.ustc.edu.cn/), collaborated with Prof. [Weiming Zhang](http://staff.ustc.edu.cn/~zhangwm/).
+I am an associate researcher in the School of Cyber Science and Technology, [University of Science and Technology of China (USTC)](https://en.ustc.edu.cn/), collaborated with Prof. [Weiming Zhang](http://staff.ustc.edu.cn/~zhangwm/).
 
 **Research interest:** digital watermarking, 3D printing, and human-computer interaction
