@@ -1,24 +1,24 @@
 ---
 layout: about
-title: About
+title: about
 permalink: /
-description: 
+subtitle: School of Cyber Science and Technology, USTC
 
 profile:
   align: left
   image: tree_L.jpg
-  address: 
+  image_circular: false # crops the image to make it circular
+  more_info: >
+    <p>Associate Researcher</p>
+    <p>School of Cyber Science and Technology</p>
+    <p>University of Science and Technology of China</p>
 
-news: false  # includes a list of news items
 selected_papers: true # includes a list of papers marked as "selected={true}"
-highlights: false
-social: true  # includes social icons at the bottom of the page
-# No.96, JinZhai Road Baohe District, Hefei, Anhui, China<br>
+social: true # includes social icons at the bottom of the page
 ---
-马**泽华**<br>
-University of Science and Technology of China<br>
-mzh045@ustc.edu.cn<br>
-[Google scholar](https://scholar.google.com/citations?user=Eom6m6UAAAAJ) | [DBLP](https://dblp.org/pid/240/2623.html) | [Github](https://github.com/mzh045) | [ORCID](https://orcid.org/0000-0002-8153-341X)
+
+马**泽华** (Zehua Ma)<br>
+mzh045@ustc.edu.cn
 
 I am an associate researcher in the School of Cyber Science and Technology, [University of Science and Technology of China (USTC)](https://en.ustc.edu.cn/), collaborated with Prof. [Weiming Zhang](http://staff.ustc.edu.cn/~zhangwm/).
 

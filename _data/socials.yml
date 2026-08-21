@@ -1,0 +1,8 @@
+# 社交链接配置（图标显示顺序与本文件定义顺序一致）
+# 完整可用键见 jekyll-socials 插件文档: https://github.com/george-gca/jekyll-socials
+email: mzh045@ustc.edu.cn
+github_username: mzh045 # your GitHub username
+scholar_userid: Eom6m6UAAAAJ # your Google Scholar ID
+orcid_id: 0000-0002-8153-341X # your ORCID iD
+dblp_url: https://dblp.org/pid/240/2623.html # your DBLP profile url
+# wechat_qr: # filename of your wechat qr-code saved as an image (e.g., wechat-qr.png if saved to assets/img/wechat-qr.png)

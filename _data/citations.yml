@@ -1,0 +1,3 @@
+# Google Scholar 引用数缓存（由 al-folio 的 update-citations 工作流生成）。
+# 当前为空：bib 条目里没有 google_scholar_id 字段时不会使用本文件。
+papers: {}
