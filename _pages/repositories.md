@@ -2,8 +2,9 @@
 layout: page
 permalink: /repositories/
 title: repositories
-nav: true
-nav_order: 4
+# 暂不出现在菜单中（将来恢复：取消下面两行注释即可）
+# nav: true
+# nav_order: 4
 ---
 
 {% if site.data.repositories.github_users %}
