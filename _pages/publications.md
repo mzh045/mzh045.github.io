@@ -12,10 +12,7 @@ nav_order: 2
 
 {% include bib_search.liquid %}
 
-<!-- 书籍暂不展示：如需恢复，在下方加回
-     ## Books
-     <div class="publications">{% bibliography -f books %}</div>
-     （books.bib 数据仍保留在 _bibliography/ 中） -->
+<!-- 书籍暂不展示；数据保留在 _bibliography/books.bib，恢复方法见本地操作文档.md -->
 
 ## Papers
 
