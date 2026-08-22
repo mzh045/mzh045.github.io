@@ -44,6 +44,11 @@ body.sticky-bottom-footer {
   img {
     width: 100%;
   }
+
+  // 本地改动：头像下方 more_info 文字调小一号（默认继承正文 1rem）
+  .more-info {
+    font-size: 0.85rem;
+  }
 }
 
 // Content layout uses Bootstrap's grid system with responsive columns
