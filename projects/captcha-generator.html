@@ -23,7 +23,8 @@
             padding: 30px;
             border-radius: 16px;
             box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-            width: 340px;
+            width: 400px;
+            max-width: calc(100vw - 24px);
             text-align: center;
         }
         h2 { margin-top: 0; color: #333; font-size: 22px; margin-bottom: 20px;}
@@ -54,7 +55,7 @@
             cursor: pointer;
             position: relative;
         }
-        canvas { display: block; }
+        canvas { display: block; max-width: 100%; height: auto; }
         
         .btn-group { display: flex; gap: 10px; }
         button {
@@ -95,7 +96,7 @@
     </div>
 
     <div class="canvas-wrapper" onclick="drawCaptcha()" title="点击刷新">
-        <canvas id="captchaCanvas" width="240" height="80"></canvas>
+        <canvas id="captchaCanvas" width="340" height="90"></canvas>
     </div>
 
     <div class="btn-group">
@@ -181,23 +182,41 @@
         // --- 3. 绘制文字 (核心) ---
         // 字体池
         const fonts = ['Arial', 'Verdana', 'Georgia', 'Times New Roman', 'Courier New'];
-        
-        // 动态计算字体大小
-        let fontSize = 40;
-        if (text.length > 5) fontSize = 32;
-        if (text.length > 8) fontSize = 24;
 
-        // 计算起始位置以居中
-        const totalWidthEstimate = text.length * (fontSize * 0.8); 
-        let startX = (w - totalWidthEstimate) / 2;
+        // 按给定字号逐字测量真实宽度（中英文混排都准确）
+        function layoutChars(size) {
+            ctx.textBaseline = 'middle';
+            const items = [];
+            let total = 0;
+            for (const ch of text) {
+                const fontName = fonts[randomInt(0, fonts.length - 1)];
+                ctx.font = `bold ${size}px ${fontName}`;
+                const cw = ctx.measureText(ch).width;
+                items.push({ ch, font: ctx.font, width: cw });
+                total += cw;
+            }
+            return { items, total };
+        }
 
-        for (let i = 0; i < text.length; i++) {
+        // 自动缩放：字号从大到小逐级减，直到整串文字装进画布（左右各留 20px）
+        const spacing = 6;
+        const numChars = [...text].length || 1;
+        let fontSize = Math.max(14, Math.min(46, Math.floor((w - 40) / numChars / 0.65)));
+        let layout;
+        while (true) {
+            layout = layoutChars(fontSize);
+            const totalWidth = layout.total + spacing * (layout.items.length - 1);
+            if (totalWidth <= w - 40 || fontSize <= 14) break;
+            fontSize -= 2;
+        }
+        let x = (w - (layout.total + spacing * (layout.items.length - 1))) / 2;
+
+        for (let i = 0; i < layout.items.length; i++) {
+            const c = layout.items[i];
             ctx.save();
-            
-            // 随机字体
-            const fontName = fonts[randomInt(0, fonts.length - 1)];
-            // 字体样式设置
-            ctx.font = `bold ${fontSize + randomInt(-5, 5)}px ${fontName}`;
+
+            // 字体样式（沿用测量时的字体与字号，保证宽度一致）
+            ctx.font = c.font;
             ctx.textBaseline = 'middle';
 
             // 颜色设置
@@ -217,23 +236,21 @@
                 ctx.shadowOffsetY = 2;
             }
 
-            // 坐标变换：平移 -> 旋转 -> 缩放
-            let x = startX + i * (fontSize * 0.8) + 20;
-            let y = h / 2;
-            
-            ctx.translate(x, y);
-            
-            // 随机旋转 (-30度 到 30度)
-            const angle = randomInt(-30, 30) * Math.PI / 180;
+            // 坐标变换：平移到字符中心 -> 旋转 -> 缩放
+            ctx.translate(x + c.width / 2, h / 2);
+
+            // 随机旋转（长文本用小角度，避免上下出界）
+            const maxAngle = layout.items.length > 8 ? 15 : 30;
+            const angle = randomInt(-maxAngle, maxAngle) * Math.PI / 180;
             ctx.rotate(angle);
-            
+
             // 随机轻微缩放
             const scale = 1 + Math.random() * 0.2;
             ctx.scale(scale, scale);
 
-            // 绘制
+            // 绘制（以字符中心为原点）
             if (styleType === 'sketch') {
-                ctx.strokeText(text[i], 0, 0);
+                ctx.strokeText(c.ch, -c.width / 2, 0);
                 // 素描风再加一点乱画的线条在文字上
                 ctx.beginPath();
                 ctx.moveTo(-10, randomInt(-10, 10));
@@ -241,10 +258,11 @@
                 ctx.strokeStyle = "rgba(0,0,0,0.1)";
                 ctx.stroke();
             } else {
-                ctx.fillText(text[i], 0, 0);
+                ctx.fillText(c.ch, -c.width / 2, 0);
             }
 
             ctx.restore();
+            x += c.width + spacing;
         }
 
         // --- 4. 前景干扰 (可选，增加难度) ---
