@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>保持唤醒 · Keep Awake</title>
+<style>
+    :root { --primary-color:#4a90e2; --ok:#28a745; --bg-color:#f0f2f5; }
+    body {
+        font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+        background:var(--bg-color);
+        display:flex; justify-content:center; align-items:center;
+        min-height:100vh; margin:0;
+    }
+    .container {
+        background:white; padding:30px; border-radius:16px;
+        box-shadow:0 10px 25px rgba(0,0,0,0.1);
+        width:400px; max-width:calc(100vw - 24px); text-align:center;
+    }
+    h2 { margin-top:0; color:#333; font-size:22px; margin-bottom:8px; }
+    .status-dot {
+        display:inline-block; width:14px; height:14px; border-radius:50%;
+        background:#aaa; margin-right:8px; vertical-align:middle; transition:background .3s;
+    }
+    .status-dot.on { background:var(--ok); animation:pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{ box-shadow:0 0 5px var(--ok);} 50%{ box-shadow:0 0 16px var(--ok);} }
+    .status { color:#666; font-size:15px; margin-bottom:20px; }
+    .timer { font-size:36px; font-weight:600; font-variant-numeric:tabular-nums; color:#333; margin:8px 0 22px; }
+    button {
+        width:100%; padding:14px; border:none; border-radius:8px;
+        font-size:16px; font-weight:600; cursor:pointer; transition:all .2s;
+    }
+    .btn-on  { background:var(--primary-color); color:white; }
+    .btn-on:hover  { background:#357abd; }
+    .btn-off { background:#e9ecef; color:#666; }
+    .btn-off:hover { background:#dee2e6; }
+    .tip { font-size:12px; color:#999; margin-top:16px; line-height:1.7; text-align:left; }
+    audio { display:none; }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>☕ 保持唤醒</h2>
+
+    <div class="status">
+        <span class="status-dot" id="dot"></span><span id="statusText">未激活</span>
+    </div>
+
+    <div class="timer" id="timer">00:00:00</div>
+
+    <button class="btn-on" id="toggleBtn">激活</button>
+
+    <div class="tip">
+        · 双保险原理：<b>Screen Wake Lock API</b>（保持屏幕常亮）+ <b>静音音频循环</b>（系统层面阻止闲置休眠，切到后台标签页仍有效）<br>
+        · 浏览器不支持 Wake Lock 时自动退回纯音频模式（屏幕可能熄灭，但系统不睡）<br>
+        · 切回本标签页会自动重新申请 Wake Lock（页面隐藏时系统会将其释放）<br>
+        · 仅防“闲置超时休眠”，合盖 / 手动休眠拦不住；本页需保持打开
+    </div>
+
+    <audio id="silentAudio" loop></audio>
+</div>
+
+<script>
+    // ---- 静音音频兜底：程序生成 1 秒 8kHz 16bit 单声道全零 WAV（约 16KB，无需外部文件） ----
+    function silentWavDataUri() {
+        const sr = 8000, n = sr;                 // 1 秒
+        const dataSize = n * 2;                  // 16bit = 2 bytes/sample
+        const buf = new ArrayBuffer(44 + dataSize);
+        const v = new DataView(buf);
+        const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+        ws(0, 'RIFF'); v.setUint32(4, 36 + dataSize, true); ws(8, 'WAVE');
+        ws(12, 'fmt '); v.setUint32(16, 16, true);           // fmt 块长度
+        v.setUint16(20, 1, true); v.setUint16(22, 1, true);  // PCM / 单声道
+        v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); // 采样率 / 字节率
+        v.setUint16(32, 2, true); v.setUint16(34, 16, true); // 块对齐 / 位深
+        ws(36, 'data'); v.setUint32(40, dataSize, true);
+        // 44 之后保持 0 —— 16bit 静音即全零
+        let bin = '';
+        const u8 = new Uint8Array(buf);
+        for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+        return 'data:audio/wav;base64,' + btoa(bin);
+    }
+
+    let sentinel = null, active = false, startTime = 0, timerId = null;
+    const audio = document.getElementById('silentAudio');
+    const supported = 'wakeLock' in navigator;
+
+    async function requestLock() {
+        if (!supported) return;
+        try {
+            sentinel = await navigator.wakeLock.request('screen');
+            sentinel.addEventListener('release', () => {
+                // 页面还可见却被释放（如系统策略）→ 立即重试；不可见则等切回来再申请
+                if (active && document.visibilityState === 'visible') requestLock();
+            });
+        } catch (e) { /* 被拒绝时仍有音频兜底 */ }
+    }
+
+    function updateUI() {
+        document.getElementById('dot').classList.toggle('on', active);
+        document.getElementById('statusText').textContent =
+            active ? (supported ? '屏幕保持唤醒中' : '系统保持唤醒中（音频模式）') : '未激活';
+        const btn = document.getElementById('toggleBtn');
+        btn.textContent = active ? '停止' : '激活';
+        btn.className = active ? 'btn-off' : 'btn-on';
+    }
+
+    function tick() {
+        const s = Math.floor((Date.now() - startTime) / 1000);
+        const p = n => String(n).padStart(2, '0');
+        document.getElementById('timer').textContent =
+            `${p(Math.floor(s / 3600))}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}`;
+    }
+
+    async function start() {
+        active = true; startTime = Date.now();
+        audio.src = silentWavDataUri();
+        audio.volume = 1;
+        audio.play().catch(() => {});   // 静音 WAV 循环：后台标签页仍生效
+        await requestLock();
+        updateUI();
+        timerId = setInterval(tick, 1000); tick();
+    }
+
+    function stop() {
+        active = false;
+        audio.pause(); audio.removeAttribute('src');
+        if (sentinel) { sentinel.release(); sentinel = null; }
+        clearInterval(timerId);
+        document.getElementById('timer').textContent = '00:00:00';
+        updateUI();
+    }
+
+    document.getElementById('toggleBtn').onclick = () => active ? stop() : start();
+
+    // 切回标签页时自动重新申请（Wake Lock 在页面隐藏时会被系统释放）
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && active) requestLock();
+    });
+
+    if (!supported) {
+        document.querySelector('.tip').innerHTML +=
+            '<br>· 当前浏览器不支持 Wake Lock API，仅音频兜底生效';
+    }
+</script>
+
+</body>
+</html>
