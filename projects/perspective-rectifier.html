@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>透视矫正 · Perspective Rectifier</title>
+<style>
+    :root { --primary-color:#4a90e2; --ok:#28a745; --bg-color:#f0f2f5; }
+    * { box-sizing:border-box; }
+    body {
+        font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+        background:var(--bg-color); margin:0; padding:16px;
+        display:flex; justify-content:center; align-items:flex-start;
+        min-height:100vh;
+    }
+    .container {
+        background:white; padding:24px; border-radius:16px;
+        box-shadow:0 10px 25px rgba(0,0,0,0.1);
+        width:100%; max-width:860px;
+    }
+    h2 { margin:0 0 6px; color:#333; font-size:22px; }
+    .sub { color:#888; font-size:13px; margin-bottom:16px; line-height:1.6; }
+
+    #dropZone {
+        border:2px dashed #bbb; border-radius:12px; padding:34px 10px;
+        text-align:center; color:#999; cursor:pointer;
+        transition:border-color .2s, background .2s; touch-action:manipulation;
+    }
+    #dropZone.hover { border-color:var(--primary-color); background:rgba(74,144,226,.05); }
+    #dropZone .big { font-size:34px; }
+    #dropZone .t { margin-top:6px; font-size:14px; }
+
+    #canvasWrap { position:relative; display:none; margin-top:14px; }
+    #srcCanvas {
+        width:100%; display:block; border-radius:8px; touch-action:none;
+        background:
+            linear-gradient(45deg,#e8e8e8 25%,transparent 25%,transparent 75%,#e8e8e8 75%),
+            linear-gradient(45deg,#e8e8e8 25%,transparent 25%,transparent 75%,#e8e8e8 75%);
+        background-size:16px 16px; background-position:0 0,8px 8px;
+    }
+    /* 放大镜（拖点时出现，手指上方，避开遮挡） */
+    #loupe {
+        position:fixed; display:none; pointer-events:none; z-index:99;
+        width:150px; height:150px;
+        border-radius:50%; border:3px solid white;
+        box-shadow:0 4px 18px rgba(0,0,0,.45);
+    }
+
+    .bar { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+    button {
+        flex:1; min-width:100px; min-height:46px; padding:12px;
+        border:none; border-radius:8px; font-size:15px; font-weight:600;
+        cursor:pointer; transition:all .2s; touch-action:manipulation;
+    }
+    .btn-p  { background:var(--primary-color); color:white; }
+    .btn-p:hover { background:#357abd; }
+    .btn-ok { background:var(--ok); color:white; }
+    .btn-ok:hover { background:#218838; }
+    .btn-g  { background:#e9ecef; color:#666; }
+    .btn-g:hover { background:#dee2e6; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+
+    #status { margin-top:12px; font-size:14px; color:#555; }
+    #status b { color:var(--primary-color); }
+
+    #resultWrap { display:none; margin-top:18px; }
+    #resultWrap h3 { color:#333; font-size:16px; margin:0 0 10px; }
+    #dstCanvas { width:100%; display:block; border-radius:8px; border:1px solid #eee; }
+
+    .tip { font-size:12px; color:#999; margin-top:16px; line-height:1.7; }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📐 透视矫正</h2>
+    <div class="sub">上传图片 → 点选 4 个角点（顺序随意，自动识别四角）→ 拖动微调 → 恢复成矩形下载。<br>手机上拖动角点时会出现<b>放大镜</b>，方便精确对位。</div>
+
+    <div id="dropZone">
+        <div class="big">🖼️</div>
+        <div class="t">点击选择图片，或把图片拖到这里</div>
+        <input type="file" id="fileInput" accept="image/*" hidden>
+    </div>
+
+    <div id="canvasWrap">
+        <canvas id="srcCanvas"></canvas>
+    </div>
+
+    <div class="bar">
+        <button class="btn-g" id="btnUndo" disabled>↩︎ 撤销一点</button>
+        <button class="btn-g" id="btnReset" disabled>重选</button>
+        <button class="btn-p" id="btnRect" disabled>恢复矩形</button>
+    </div>
+
+    <div id="status">等待上传图片</div>
+
+    <div id="resultWrap">
+        <h3>矫正结果</h3>
+        <canvas id="dstCanvas"></canvas>
+        <div class="bar">
+            <button class="btn-g" id="btnAgain">重新选点</button>
+            <button class="btn-ok" id="btnDownload">⬇︎ 下载 PNG</button>
+        </div>
+    </div>
+
+    <div class="tip">
+        · 原理：4 对点确定单应性矩阵（8×8 线性方程组，高斯消元），逐像素反向映射 + 双线性插值<br>
+        · 输出尺寸按四条边平均估算：宽 = (上边 + 下边)/2，高 = (左边 + 右边)/2<br>
+        · 图片会预先缩放到最长边 1600px 再处理（速度与精度折中）；全程本地计算，无上传
+    </div>
+</div>
+
+<canvas id="loupe"></canvas>
+
+<script>
+'use strict';
+/* ---------- 全局状态 ---------- */
+let img = null;            // 处理用图像（最长边 ≤1600）的自然尺寸
+let baseCanvas = null;     // 离屏：原始图像像素
+let pts = [];              // 点击顺序的角点（图像坐标系）
+let dragIdx = -1;          // 正在拖动的点下标
+const dpr = window.devicePixelRatio || 1;
+
+const srcCanvas = document.getElementById('srcCanvas');
+const sctx = srcCanvas.getContext('2d');
+const loupe = document.getElementById('loupe');
+const lctx = loupe.getContext('2d');
+const statusEl = document.getElementById('status');
+
+/* ---------- 上传 ---------- */
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('hover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
+dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('hover');
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
+
+function loadFile(file) {
+    if (!file.type.startsWith('image/')) { alert('请选择图片文件'); return; }
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => {
+        URL.revokeObjectURL(url);
+        // 预缩放到最长边 1600
+        const MAX = 1600;
+        const k = Math.min(1, MAX / Math.max(im.width, im.height));
+        img = { w: Math.round(im.width * k), h: Math.round(im.height * k) };
+        baseCanvas = document.createElement('canvas');
+        baseCanvas.width = img.w; baseCanvas.height = img.h;
+        baseCanvas.getContext('2d').drawImage(im, 0, 0, img.w, img.h);
+        resetPoints();
+        dropZone.style.display = 'none';
+        document.getElementById('canvasWrap').style.display = 'block';
+        fitCanvas();
+        setStatus();
+    };
+    im.src = url;
+}
+
+/* ---------- 画布尺寸（随窗口自适应） ---------- */
+function fitCanvas() {
+    if (!img) return;
+    const cssW = srcCanvas.clientWidth || 600;
+    const scale = cssW / img.w;                      // 图像 → 屏幕缩放
+    srcCanvas.width = Math.round(cssW * dpr);
+    srcCanvas.height = Math.round(img.h * scale * dpr);
+    srcCanvas._scale = scale;                        // 指针坐标换算用
+    redraw();
+}
+window.addEventListener('resize', () => { fitCanvas(); });
+
+/* ---------- 指针交互（鼠标 + 触摸统一；触摸拖点显示放大镜） ---------- */
+function evToImg(e) {
+    const r = srcCanvas.getBoundingClientRect();
+    const s = srcCanvas._scale;
+    return {
+        x: Math.min(img.w, Math.max(0, (e.clientX - r.left) / s)),
+        y: Math.min(img.h, Math.max(0, (e.clientY - r.top) / s)),
+        sx: e.clientX, sy: e.clientY
+    };
+}
+const HIT = 30;   // 屏幕像素命中半径（手指友好）
+srcCanvas.addEventListener('pointerdown', e => {
+    if (!img) return;
+    e.preventDefault();
+    srcCanvas.setPointerCapture(e.pointerId);
+    const p = evToImg(e);
+    const hitR = HIT / srcCanvas._scale;
+    dragIdx = pts.findIndex(q => Math.hypot(q.x - p.x, q.y - p.y) <= hitR);
+    if (dragIdx === -1) {
+        if (pts.length < 4) { pts.push({ x: p.x, y: p.y }); dragIdx = pts.length - 1; setStatus(); }
+        else return;
+    }
+    if (e.pointerType === 'touch') showLoupe(p);
+    redraw();
+});
+srcCanvas.addEventListener('pointermove', e => {
+    if (dragIdx === -1 || !img) return;
+    e.preventDefault();
+    const p = evToImg(e);
+    pts[dragIdx].x = p.x; pts[dragIdx].y = p.y;
+    if (e.pointerType === 'touch') showLoupe(p);
+    redraw();
+});
+['pointerup', 'pointercancel'].forEach(ev => srcCanvas.addEventListener(ev, e => {
+    dragIdx = -1; hideLoupe(); redraw();
+}));
+
+/* ---------- 放大镜 ---------- */
+const LOUPE_D = 150, LOUPE_Z = 3.2;   // 直径 / 相对屏幕的放大倍数
+loupe.width = loupe.height = Math.round(LOUPE_D * dpr);   // 高分屏清晰
+function showLoupe(p) {
+    const s = srcCanvas._scale;
+    const r = srcCanvas.getBoundingClientRect();
+    const px = r.left + p.x * s, py = r.top + p.y * s;
+    const L = Math.max(8, Math.min(window.innerWidth - LOUPE_D - 8, px - LOUPE_D / 2));
+    const T = Math.max(8, py - LOUPE_D - 46);       // 悬在手指上方
+    loupe.style.left = L + 'px'; loupe.style.top = T + 'px'; loupe.style.display = 'block';
+    // 内容：以该点为中心，按 LOUPE_Z × 屏幕倍率取样原图
+    const k = s * LOUPE_Z;
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lctx.clearRect(0, 0, LOUPE_D, LOUPE_D);
+    lctx.save();
+    lctx.beginPath(); lctx.arc(LOUPE_D/2, LOUPE_D/2, LOUPE_D/2 - 1, 0, Math.PI*2); lctx.clip();
+    lctx.fillStyle = '#222'; lctx.fillRect(0, 0, LOUPE_D, LOUPE_D);
+    lctx.imageSmoothingEnabled = false;
+    lctx.drawImage(baseCanvas,
+        p.x - LOUPE_D/(2*k), p.y - LOUPE_D/(2*k), LOUPE_D/k, LOUPE_D/k,
+        0, 0, LOUPE_D, LOUPE_D);
+    // 十字线
+    lctx.strokeStyle = 'rgba(255,255,0,.9)'; lctx.lineWidth = 1.2;
+    lctx.beginPath();
+    lctx.moveTo(LOUPE_D/2, 10); lctx.lineTo(LOUPE_D/2, LOUPE_D-10);
+    lctx.moveTo(10, LOUPE_D/2); lctx.lineTo(LOUPE_D-10, LOUPE_D/2);
+    lctx.stroke();
+    lctx.restore();
+}
+function hideLoupe() { loupe.style.display = 'none'; }
+
+/* ---------- 绘制 ---------- */
+function orderPoints(list) {
+    // 质心极角排序 → 任意旋转/透视下都能得到正确的环形顺序；min(x+y) 定起点，有向面积定方向
+    const cx = list.reduce((a, p) => a + p.x, 0) / 4;
+    const cy = list.reduce((a, p) => a + p.y, 0) / 4;
+    const byAng = [...list].sort((p, q) =>
+        Math.atan2(p.y - cy, p.x - cx) - Math.atan2(q.y - cy, q.x - cx));
+    let i0 = 0;
+    for (let i = 1; i < 4; i++)
+        if (byAng[i].x + byAng[i].y < byAng[i0].x + byAng[i0].y) i0 = i;
+    const cyc = byAng.slice(i0).concat(byAng.slice(0, i0));       // [tl, a, b, c]
+    let area = 0;                                                  // 有向面积（鞋带）
+    for (let i = 0; i < 4; i++) {
+        const p = cyc[i], q = cyc[(i + 1) % 4];
+        area += p.x * q.y - q.x * p.y;
+    }
+    return area >= 0 ? [cyc[0], cyc[1], cyc[2], cyc[3]]
+                     : [cyc[0], cyc[3], cyc[2], cyc[1]];
+}
+function isConvex(q) {                                            // 顺序四点是否凸
+    let sign = 0;
+    for (let i = 0; i < 4; i++) {
+        const a = q[i], b = q[(i + 1) % 4], c = q[(i + 2) % 4];
+        const cr = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+        if (Math.abs(cr) < 1e-9) continue;
+        const s = Math.sign(cr);
+        if (sign && s !== sign) return false;
+        sign = s;
+    }
+    return true;
+}
+function estSize() {
+    if (pts.length !== 4) return null;
+    const [tl, tr, br, bl] = orderPoints(pts);
+    const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    return {
+        w: Math.max(1, Math.round((D(tl, tr) + D(bl, br)) / 2)),
+        h: Math.max(1, Math.round((D(tl, bl) + D(tr, br)) / 2))
+    };
+}
+function setStatus() {
+    if (!img) return;
+    if (pts.length < 4) statusEl.innerHTML = `已选 <b>${pts.length}</b> / 4 个角点 — 在图上继续点击`;
+    else {
+        const sz = estSize();
+        statusEl.innerHTML = `4 点就绪（自动定序）· 估算输出 <b>${sz.w} × ${sz.h}</b> px — 可拖动微调`;
+    }
+    document.getElementById('btnUndo').disabled = pts.length === 0;
+    document.getElementById('btnReset').disabled = pts.length === 0;
+    document.getElementById('btnRect').disabled = pts.length !== 4;
+}
+function redraw() {
+    if (!img) return;
+    const s = srcCanvas._scale;
+    sctx.setTransform(dpr * s, 0, 0, dpr * s, 0, 0);
+    sctx.clearRect(0, 0, img.w, img.h);
+    sctx.drawImage(baseCanvas, 0, 0);
+
+    if (pts.length >= 3) {           // 选区外暗化
+        const q = pts.length === 4 ? orderPoints(pts) : pts;
+        sctx.save();
+        sctx.fillStyle = 'rgba(0,0,0,.38)';
+        sctx.beginPath();
+        sctx.rect(0, 0, img.w, img.h);
+        sctx.moveTo(q[0].x, q[0].y);
+        for (let i = q.length - 1; i >= 1; i--) sctx.lineTo(q[i].x, q[i].y);
+        sctx.closePath();
+        sctx.fill('evenodd');
+        sctx.restore();
+        sctx.strokeStyle = '#ffd400'; sctx.lineWidth = 2 / s;
+        sctx.beginPath();
+        sctx.moveTo(q[0].x, q[0].y);
+        for (let i = 1; i < q.length; i++) sctx.lineTo(q[i].x, q[i].y);
+        sctx.closePath(); sctx.stroke();
+    }
+    const r = 7 / s;
+    pts.forEach((p, i) => {
+        sctx.beginPath();
+        sctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        sctx.fillStyle = i === dragIdx ? '#ffd400' : '#4a90e2';
+        sctx.fill();
+        sctx.lineWidth = 2.5 / s; sctx.strokeStyle = 'white'; sctx.stroke();
+        sctx.fillStyle = 'white';
+        sctx.font = `bold ${13 / s}px Arial`;
+        sctx.textAlign = 'center'; sctx.textBaseline = 'middle';
+        sctx.fillText(i + 1, p.x, p.y);
+    });
+}
+
+/* ---------- 单应性：解 目标→源 的 3×3（h33=1），8×8 高斯消元 ---------- */
+function solveH(dst, src) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+        const { x, y } = dst[i], { x: u, y: v } = src[i];
+        A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+        A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+    }
+    const n = 8;
+    for (let col = 0; col < n; col++) {              // 部分主元消元
+        let piv = col;
+        for (let r = col + 1; r < n; r++)
+            if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+        if (Math.abs(A[piv][col]) < 1e-10) return null;
+        [A[col], A[piv]] = [A[piv], A[col]];
+        [b[col], b[piv]] = [b[piv], b[col]];
+        for (let r = col + 1; r < n; r++) {
+            const f = A[r][col] / A[col][col];
+            for (let c = col; c < n; c++) A[r][c] -= f * A[col][c];
+            b[r] -= f * b[col];
+        }
+    }
+    const h = new Array(9).fill(0); h[8] = 1;
+    for (let r = n - 1; r >= 0; r--) {
+        let s2 = b[r];
+        for (let c = r + 1; c < n; c++) s2 -= A[r][c] * h[c];
+        h[r] = s2 / A[r][r];
+    }
+    return h;
+}
+
+/* ---------- 反向映射 + 双线性插值 ---------- */
+function rectify() {
+    if (pts.length !== 4) return;
+    const quad = orderPoints(pts);
+    if (!isConvex(quad)) { alert('四个点构成的四边形非凸（可能交叉了），请拖动调整'); return; }
+    const [tl, tr, br, bl] = quad;
+    let { w: W, h: H } = estSize();
+    const cap = 3000, m = Math.max(W, H);
+    if (m > cap) { W = Math.round(W * cap / m); H = Math.round(H * cap / m); }
+    const Hm = solveH(
+        [{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}],
+        [tl, tr, br, bl]
+    );
+    if (!Hm) { alert('选点退化（三点共线），请重新选点'); return; }
+
+    const dst = document.getElementById('dstCanvas');
+    dst.width = W; dst.height = H;
+    const dctx = dst.getContext('2d');
+    const srcData = baseCanvas.getContext('2d').getImageData(0, 0, img.w, img.h);
+    const out = dctx.createImageData(W, H);
+    const sd = srcData.data, od = out.data, sw = img.w, sh = img.h;
+    const [h0,h1,h2,h3,h4,h5,h6,h7] = Hm;
+
+    for (let y = 0; y < H; y++) {
+        const wy = h7 * y + 1, uy0 = h1 * y + h2, vy0 = h4 * y + h5;
+        for (let x = 0; x < W; x++) {
+            const den = h6 * x + wy;
+            const u = (h0 * x + uy0) / den;
+            const v = (h3 * x + vy0) / den;
+            const o = (y * W + x) * 4;
+            if (u < 0 || v < 0 || u >= sw - 1 || v >= sh - 1) {
+                od[o] = od[o+1] = od[o+2] = 255; od[o+3] = 255;   // 越界填白
+                continue;
+            }
+            const x0 = u | 0, y0 = v | 0, fx = u - x0, fy = v - y0;
+            const i00 = (y0 * sw + x0) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4;
+            for (let c = 0; c < 3; c++) {
+                const top = sd[i00+c] * (1-fx) + sd[i10+c] * fx;
+                const bot = sd[i01+c] * (1-fx) + sd[i11+c] * fx;
+                od[o+c] = top * (1-fy) + bot * fy;
+            }
+            od[o+3] = 255;
+        }
+    }
+    dctx.putImageData(out, 0, 0);
+    document.getElementById('resultWrap').style.display = 'block';
+    document.getElementById('resultWrap').scrollIntoView({ behavior: 'smooth' });
+    statusEl.innerHTML = `完成 · 输出 <b>${W} × ${H}</b> px（可继续拖点重新矫正）`;
+}
+
+/* ---------- 按钮 ---------- */
+document.getElementById('btnUndo').onclick = () => { pts.pop(); setStatus(); redraw(); };
+function resetPoints() {
+    pts = []; dragIdx = -1; hideLoupe();
+    document.getElementById('resultWrap').style.display = 'none';
+    setStatus(); if (img) redraw();
+}
+document.getElementById('btnReset').onclick = resetPoints;
+document.getElementById('btnAgain').onclick = resetPoints;
+document.getElementById('btnRect').onclick = rectify;
+document.getElementById('btnDownload').onclick = () => {
+    const a = document.createElement('a');
+    a.download = 'rectified.png';
+    a.href = document.getElementById('dstCanvas').toDataURL('image/png');
+    a.click();
+};
+</script>
+
+</body>
+</html>
