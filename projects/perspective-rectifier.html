@@ -60,6 +60,20 @@
     .btn-g:hover { background:#dee2e6; }
     button:disabled { opacity:.45; cursor:not-allowed; }
 
+    .sizeRow {
+        display:flex; align-items:center; gap:10px; margin-top:12px;
+        flex-wrap:wrap; font-size:14px; color:#555; touch-action:manipulation;
+    }
+    .sizeRow input[type=number] {
+        width:86px; padding:8px; border:1px solid #ddd; border-radius:8px;
+        font-size:15px; outline:none; transition:border .3s;
+    }
+    .sizeRow input[type=number]:focus { border-color:var(--primary-color); }
+    .sizeRow select {
+        padding:8px; border:1px solid #ddd; border-radius:8px;
+        font-size:14px; background:white; outline:none;
+    }
+
     #status { margin-top:12px; font-size:14px; color:#555; }
     #status b { color:var(--primary-color); }
 
@@ -92,6 +106,17 @@
         <button class="btn-p" id="btnRect" disabled>恢复矩形</button>
     </div>
 
+    <div class="sizeRow">
+        <label><input type="checkbox" id="autoSize" checked> 自动尺寸</label>
+        <select id="scaleSel" title="相对估算尺寸的放大倍率">
+            <option value="1">×1</option>
+            <option value="2">×2</option>
+            <option value="4" selected>×4</option>
+        </select>
+        <span>宽 <input type="number" id="outW" min="1" max="8000" placeholder="自动"> ×
+              高 <input type="number" id="outH" min="1" max="8000" placeholder="自动"> px</span>
+    </div>
+
     <div id="status">等待上传图片</div>
 
     <div id="resultWrap">
@@ -105,7 +130,7 @@
 
     <div class="tip">
         · 原理：4 对点确定单应性矩阵（8×8 线性方程组，高斯消元），逐像素反向映射 + 双线性插值<br>
-        · 输出尺寸按四条边平均估算：宽 = (上边 + 下边)/2，高 = (左边 + 右边)/2<br>
+        · 输出尺寸按四条边平均估算：宽 = (上边 + 下边)/2，高 = (左边 + 右边)/2；<b>默认 ×4 超采样</b>，避免像素缩小损失；取消"自动尺寸"后可手动指定任意宽高（上限 8000px / 4000 万像素）<br>
         · 图片会预先缩放到最长边 1600px 再处理（速度与精度折中）；全程本地计算，无上传
     </div>
 </div>
@@ -281,12 +306,27 @@ function estSize() {
         h: Math.max(1, Math.round((D(tl, bl) + D(tr, br)) / 2))
     };
 }
+/* ---------- 输出尺寸：自动（估算 × 倍率）或手动 ---------- */
+const outW = document.getElementById('outW');
+const outH = document.getElementById('outH');
+const autoSize = document.getElementById('autoSize');
+const scaleSel = document.getElementById('scaleSel');
+function fillSize() {
+    if (pts.length !== 4) return;
+    const sz = estSize();
+    outW.value = Math.max(1, sz.w * +scaleSel.value);
+    outH.value = Math.max(1, sz.h * +scaleSel.value);
+}
+autoSize.addEventListener('change', () => { if (autoSize.checked) fillSize(); });
+scaleSel.addEventListener('change', () => { if (autoSize.checked) fillSize(); });
+
 function setStatus() {
     if (!img) return;
     if (pts.length < 4) statusEl.innerHTML = `已选 <b>${pts.length}</b> / 4 个角点 — 在图上继续点击`;
     else {
         const sz = estSize();
-        statusEl.innerHTML = `4 点就绪（自动定序）· 估算输出 <b>${sz.w} × ${sz.h}</b> px — 可拖动微调`;
+        if (autoSize.checked) fillSize();
+        statusEl.innerHTML = `4 点就绪（自动定序）· 估算 <b>${sz.w} × ${sz.h}</b> px → 输出 <b>${outW.value} × ${outH.value}</b> px${autoSize.checked ? '' : '（手动）'} — 可拖动微调`;
     }
     document.getElementById('btnUndo').disabled = pts.length === 0;
     document.getElementById('btnReset').disabled = pts.length === 0;
@@ -367,9 +407,16 @@ function rectify() {
     const quad = orderPoints(pts);
     if (!isConvex(quad)) { alert('四个点构成的四边形非凸（可能交叉了），请拖动调整'); return; }
     const [tl, tr, br, bl] = quad;
-    let { w: W, h: H } = estSize();
-    const cap = 3000, m = Math.max(W, H);
-    if (m > cap) { W = Math.round(W * cap / m); H = Math.round(H * cap / m); }
+    // 输出尺寸：取输入框（自动模式已按 估算×倍率 填好），带保护上限
+    let W = Math.round(+outW.value) || 0, H = Math.round(+outH.value) || 0;
+    if (!(W >= 1 && H >= 1)) { alert('请先填入有效的输出宽高（或勾选"自动尺寸"）'); return; }
+    W = Math.min(W, 8000); H = Math.min(H, 8000);
+    const MAXP = 40e6;                                  // 4000 万像素上限
+    if (W * H > MAXP) {
+        const k = Math.sqrt(MAXP / (W * H));
+        W = Math.round(W * k); H = Math.round(H * k);
+        outW.value = W; outH.value = H;
+    }
     const Hm = solveH(
         [{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}],
         [tl, tr, br, bl]
